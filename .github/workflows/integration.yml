@@ -9,6 +9,7 @@ on:  # yamllint disable-line rule:truthy
       - Cargo.lock
       - scripts/netem-tests.sh
       - .github/workflows/integration.yml
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
