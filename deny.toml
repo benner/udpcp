@@ -1,0 +1,36 @@
+# cargo-deny configuration — license and supply-chain policy.
+# Advisories are checked separately by cargo-audit in CI; this file gates
+# licenses, duplicate versions, and crate sources.
+
+[graph]
+# Only the platforms we build for, so Windows/WASM-only transitive crates
+# (e.g. windows-sys, wit-*) don't enter the license evaluation.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+
+[licenses]
+# Permissive licenses accepted for dependencies (most deps are dual
+# MIT-or-Apache). A few entries aren't in the tree today but are kept as a
+# defensive allow-list, so unused allowances don't fail or warn.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

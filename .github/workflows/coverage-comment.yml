@@ -1,0 +1,97 @@
+---
+name: coverage-comment
+on:  # yamllint disable-line rule:truthy  # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+permissions:
+  actions: read
+  pull-requests: write
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Download PR coverage
+        # yamllint disable-line rule:line-length
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # ratchet:actions/download-artifact@v4.3.0
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: pr
+          path: pr/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read PR number
+        id: pr
+        run: |
+          pr_number=$(cat pr/NR)
+          if ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+            echo "invalid PR number: $pr_number" >&2
+            exit 1
+          fi
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+      - name: Find baseline run
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          query="branch=main&status=success&per_page=1"
+          run_id=$(gh api \
+            "repos/$REPO/actions/workflows/coverage-baseline.yml/runs?$query" \
+            --jq '.workflow_runs[0].id // empty')
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+      - name: Download baseline coverage
+        if: steps.baseline.outputs.run-id != ''
+        # yamllint disable-line rule:line-length
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # ratchet:actions/download-artifact@v4.3.0
+        with:
+          run-id: ${{ steps.baseline.outputs.run-id }}
+          name: main-coverage
+          path: main/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build coverage report
+        id: report
+        run: |
+          pr_cov=$(cat pr/percent.txt)
+          pr_fmt=$(printf '%.2f' "$pr_cov")
+          if [ -f main/percent.txt ]; then
+            base_cov=$(cat main/percent.txt)
+            base_fmt=$(printf '%.2f' "$base_cov")
+            delta=$(printf '%.2f' "$(echo "$pr_cov - $base_cov" | bc -l)")
+            sign=""
+            if [ "$(echo "$delta >= 0" | bc -l)" = "1" ]; then
+              sign="+"
+            fi
+            fmt='## Coverage report\n\n'
+            fmt="${fmt}"'| Branch | Coverage | Delta |\n'
+            fmt="${fmt}"'|--------|----------|-------|\n'
+            fmt="${fmt}"'| base   | %s%% | |\n'
+            fmt="${fmt}"'| PR     | %s%% | %s%s%% |'
+            # shellcheck disable=SC2059
+            body=$(printf "$fmt" "$base_fmt" "$pr_fmt" "$sign" "$delta")
+          else
+            fmt='## Coverage report\n\n'
+            fmt="${fmt}"'| Branch | Coverage |\n'
+            fmt="${fmt}"'|--------|----------|\n'
+            fmt="${fmt}"'| PR     | %s%% |\n\n'
+            fmt="${fmt}"'_No baseline on main yet._'
+            # shellcheck disable=SC2059
+            body=$(printf "$fmt" "$pr_fmt")
+          fi
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "body<<GHEOF"
+            echo "$body"
+            echo "GHEOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Post coverage comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          BODY: ${{ steps.report.outputs.body }}
+        run: |-
+          gh pr comment "$PR_NUMBER" -R "$REPO" --body "$BODY" --edit-last \
+            || gh pr comment "$PR_NUMBER" -R "$REPO" --body "$BODY"

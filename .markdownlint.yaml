@@ -1,0 +1,3 @@
+# Disable line-length for table rows — wide tables are unavoidable in documentation.
+MD013:
+  tables: false

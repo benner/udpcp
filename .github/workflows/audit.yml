@@ -1,0 +1,39 @@
+---
+name: audit
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - deny.toml
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: 13 3 * * 2  # weekly, catches new advisories against pinned deps
+permissions:
+  contents: read
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        with:
+          persist-credentials: false
+      # yamllint disable-line rule:line-length
+      - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5  # ratchet:taiki-e/install-action@v2.82.0
+        with:
+          tool: cargo-deny
+      - run: cargo deny check licenses bans sources
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        with:
+          persist-credentials: false
+      # yamllint disable-line rule:line-length
+      - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5  # ratchet:taiki-e/install-action@v2.82.0
+        with:
+          tool: cargo-audit
+      - run: cargo audit

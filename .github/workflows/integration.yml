@@ -1,0 +1,29 @@
+---
+name: integration
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.rs'
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/netem-tests.sh
+      - .github/workflows/integration.yml
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        with:
+          persist-credentials: false
+      # yamllint disable-line rule:line-length
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # ratchet:dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      # yamllint disable-line rule:line-length
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # ratchet:Swatinem/rust-cache@v2.9.1
+      - run: sudo apt-get install -y musl-tools
+      - run: ./scripts/netem-tests.sh

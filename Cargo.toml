@@ -1,0 +1,35 @@
+[package]
+name = "udpcp"
+version = "0.105.0"
+edition = "2024"
+description = "UDP file copy — blast-and-NACK protocol with SHA-256 end-to-end integrity"
+license = "MIT"
+repository = "https://github.com/benner/udpcp"
+readme = "README.md"
+keywords = ["udp", "file-transfer", "networking", "cli"]
+categories = ["command-line-utilities", "network-programming"]
+rust-version = "1.88"
+
+[package.metadata.deb]
+section = "net"
+copyright = "2026 Nerijus Bendžiūnas <nerijus.bendziunas@gmail.com>"
+depends = ""
+
+[lib]
+path = "src/lib/mod.rs"
+
+[dependencies]
+sha2 = "0.11"
+clap = { version = "4", features = ["derive"] }
+signal-hook = "0.4"
+libc = "0.2"
+humantime = "2"
+serde_json = "1"
+
+[dev-dependencies]
+rand = "0.10"
+rand_pcg = "0.10"
+tempfile = "3"
+
+[profile.release]
+strip = true
