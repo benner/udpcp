@@ -1,6 +1,6 @@
 [package]
 name = "udpcp"
-version = "0.105.0"
+version = "0.106.0"
 edition = "2024"
 description = "UDP file copy — blast-and-NACK protocol with SHA-256 end-to-end integrity"
 license = "MIT"
