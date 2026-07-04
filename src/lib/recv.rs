@@ -588,7 +588,10 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                 let Some(ctx) = state.as_mut() else { continue };
 
                 match ctx.handle_done(sock, sndr) {
-                    Ok(DoneOutcome::Incomplete) => continue,
+                    Ok(DoneOutcome::Incomplete) => {
+                        last_nack_at = Some(Instant::now());
+                        continue;
+                    }
                     Ok(DoneOutcome::Complete) => {}
                     Err(e) => {
                         abandon_transfer(
@@ -1112,6 +1115,108 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read(&dst).unwrap(), want);
+    }
+
+    #[test]
+    fn done_nacks_start_the_reissue_clock() {
+        let dir = tempdir().unwrap();
+        let dst = dir.path().join("d.bin");
+        let data = b"abcde";
+        let chunk_size: u32 = 2;
+        let total: u32 = (data.len() as u32).div_ceil(chunk_size);
+        let hash: [u8; SHA256_DIGEST_SIZE] = Sha256::digest(data).into();
+
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+        let dst_str = dst.to_str().unwrap().to_string();
+        let config = RecvConfig {
+            serve: false,
+            linger_timeout: Duration::from_millis(200),
+            reporter: &NullReporter,
+            limits: RecvLimits {
+                idle_timeout: Duration::from_secs(5),
+                nack_holdoff: Duration::from_millis(50),
+            },
+        };
+        let handle = std::thread::spawn(move || receive_loop(&recv_sock, Some(&dst_str), config));
+
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; MAX_UDP_PAYLOAD];
+
+        let mut init = vec![0u8; NAME_OFFSET + 1];
+        init[0] = ProtocolVersion::V1 as u8;
+        init[SIZE_OFFSET..CHUNK_SIZE_OFFSET].copy_from_slice(&(data.len() as u64).to_be_bytes());
+        init[CHUNK_SIZE_OFFSET..HASH_OFFSET].copy_from_slice(&chunk_size.to_be_bytes());
+        init[HASH_OFFSET..HASH_OFFSET + SHA256_DIGEST_SIZE].copy_from_slice(&hash);
+        init[NAME_OFFSET] = b'd';
+        send_packet(
+            &client,
+            recv_addr,
+            &PacketHeader {
+                packet_type: PacketType::Init,
+                seq: 0,
+                payload_len: init.len() as u16,
+            },
+            &init,
+        )
+        .unwrap();
+        let (n, _) = client.recv_from(&mut buf).unwrap();
+        assert!(decode_header(&buf[..n]).unwrap().packet_type == PacketType::Ack);
+
+        let send_data = |seq: u32| {
+            let start = seq as usize * chunk_size as usize;
+            let end = (start + chunk_size as usize).min(data.len());
+            send_packet(
+                &client,
+                recv_addr,
+                &PacketHeader {
+                    packet_type: PacketType::Data,
+                    seq,
+                    payload_len: (end - start) as u16,
+                },
+                &data[start..end],
+            )
+            .unwrap();
+        };
+
+        // Leave a gap at seq 1 and declare DONE before the holdoff elapses,
+        // so the DONE-triggered NACK is the first one out.
+        send_data(0);
+        send_data(2);
+        send_control(&client, recv_addr, PacketType::Done, total).unwrap();
+
+        let (n, _) = client.recv_from(&mut buf).unwrap();
+        assert!(decode_header(&buf[..n]).unwrap().packet_type == PacketType::Nack);
+
+        // The gap clock (holdoff 50 ms) must not re-NACK right after the
+        // DONE-triggered batch; the next reissue is a full interval away.
+        client
+            .set_read_timeout(Some(Duration::from_millis(400)))
+            .unwrap();
+        let duplicate = client.recv_from(&mut buf);
+        assert!(
+            duplicate.is_err(),
+            "expected silence after the DONE-triggered NACK, got a duplicate"
+        );
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        send_data(1);
+        send_control(&client, recv_addr, PacketType::Done, total).unwrap();
+
+        loop {
+            let (n, _) = client.recv_from(&mut buf).unwrap();
+            if decode_header(&buf[..n]).unwrap().packet_type == PacketType::Fin {
+                break;
+            }
+        }
+
+        handle.join().unwrap().unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), data);
     }
 
     #[test]
