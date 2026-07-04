@@ -85,7 +85,8 @@ stateDiagram-v2
     Receiving --> Receiving : gap past holdoff → NACK
     Receiving --> Receiving : DONE + incomplete → NACK
     Receiving --> Linger : DONE + complete → SHA-256 OK, FIN sent
-    Receiving --> [*] : 30 s idle — sender disappeared
+    Receiving --> [*] : failed — 30 s idle, write error, SHA-256 mismatch
+    Receiving --> Waiting : failed [--serve]
     Linger --> Linger : DONE received → re-FIN, reset window
     Linger --> [*] : FIN_ACK, or 15 s idle (no --serve)
     Linger --> Waiting : FIN_ACK, or 15 s idle [--serve]
@@ -201,6 +202,11 @@ it resets once the sender confirms the close (a `FIN_ACK`, or the linger window
 elapses) and listens for the next sender, so back-to-back transfers work without
 restarting the process. Stray `DONE` packets from a previous sender are absorbed
 during linger and do not disturb the reset state.
+
+A failed transfer — idle timeout, write error, or SHA-256 mismatch — does not
+stop a serving receiver either: it reports the failure (`transfer failed: …`
+on stderr, or a `failed` JSONL event), discards the partial `.tmp` file, and
+goes back to listening. Without `--serve` the same failure exits with an error.
 
 ```sh
 udpcp recv 9000 --serve          # loop indefinitely

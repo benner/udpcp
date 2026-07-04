@@ -131,6 +131,9 @@ impl TextReporter {
             TransferEvent::BadInit { reason } => {
                 let _ = writeln!(err, "bad init packet: {}", reason);
             }
+            TransferEvent::Failed { reason } => {
+                let _ = writeln!(err, "transfer failed: {}", reason);
+            }
             TransferEvent::Progress { .. } => unreachable!("handled above"),
         }
     }
@@ -217,6 +220,15 @@ mod tests {
 
         assert!(out.is_empty());
         assert_eq!(err, "bad init packet: boom\n");
+    }
+
+    #[test]
+    fn transfer_failed_goes_to_stderr() {
+        let r = TextReporter::new(false);
+        let (out, err) = render(&r, TransferEvent::Failed { reason: "boom" });
+
+        assert!(out.is_empty());
+        assert_eq!(err, "transfer failed: boom\n");
     }
 
     #[test]
