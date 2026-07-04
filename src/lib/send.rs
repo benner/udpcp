@@ -79,8 +79,6 @@ impl SendSession<'_> {
         payload[NAME_OFFSET..NAME_OFFSET + name.len()].copy_from_slice(name.as_bytes());
 
         let mut buf = [0u8; MAX_UDP_PAYLOAD];
-        self.sock
-            .set_read_timeout(Some(self.limits.retransmit_timeout))?;
 
         for _ in 0..self.limits.handshake_attempts {
             send_packet(
@@ -93,18 +91,28 @@ impl SendSession<'_> {
                 },
                 &payload,
             )?;
-            match self.sock.recv_from(&mut buf) {
-                Ok((n, from))
-                    if n >= HEADER_SIZE
-                        && decode_header(&buf[..n])
-                            .is_some_and(|h| h.packet_type == PacketType::Ack) =>
-                {
-                    return Ok(from);
+
+            let attempt_deadline = Instant::now() + self.limits.retransmit_timeout;
+            loop {
+                let now = Instant::now();
+                if now >= attempt_deadline {
+                    break;
                 }
-                Ok(_) => continue,
-                Err(e) if is_timeout(&e) => continue,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
+
+                self.sock.set_read_timeout(Some(attempt_deadline - now))?;
+                match self.sock.recv_from(&mut buf) {
+                    Ok((n, from))
+                        if n >= HEADER_SIZE
+                            && decode_header(&buf[..n])
+                                .is_some_and(|h| h.packet_type == PacketType::Ack) =>
+                    {
+                        return Ok(from);
+                    }
+                    Ok(_) => {}
+                    Err(e) if is_timeout(&e) => break,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
             }
         }
 
@@ -540,6 +548,37 @@ mod tests {
             matches!(feedback, Feedback::Complete),
             "FIN should end collection"
         );
+    }
+
+    #[test]
+    fn handshake_survives_junk_before_ack() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender_addr = sock.local_addr().unwrap();
+        let receiver_addr = receiver.local_addr().unwrap();
+
+        receiver.send_to(&[9, 9, 9], sender_addr).unwrap();
+        send_control(&receiver, sender_addr, PacketType::Ack, 0).unwrap();
+
+        let session = SendSession {
+            sock: &sock,
+            target: receiver_addr,
+            chunk_size: 1400,
+            total_chunks: 1,
+            delay: None,
+            version: ProtocolVersion::V1,
+            limits: SendLimits {
+                handshake_attempts: 1,
+                retransmit_timeout: Duration::from_millis(500),
+                ..SendLimits::default()
+            },
+        };
+
+        let from = session
+            .handshake("f", 4, &[0u8; SHA256_DIGEST_SIZE])
+            .unwrap();
+
+        assert_eq!(from, receiver_addr);
     }
 
     #[test]
