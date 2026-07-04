@@ -15,17 +15,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # yamllint disable-line rule:line-length
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
       # yamllint disable-line rule:line-length
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # ratchet:dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           components: llvm-tools-preview
       # yamllint disable-line rule:line-length
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # ratchet:Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
       # yamllint disable-line rule:line-length
-      - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5  # ratchet:taiki-e/install-action@v2.82.0
+      - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5  # v2.82.0
         with:
           tool: cargo-llvm-cov
       - name: Measure coverage
@@ -35,7 +35,7 @@ jobs:
             | jq '.data[0].totals.lines.percent' > coverage/percent.txt
           cat coverage/percent.txt
       # yamllint disable-line rule:line-length
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # ratchet:actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: main-coverage
           path: coverage/
