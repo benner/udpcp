@@ -668,6 +668,8 @@ mod tests {
     use std::time::Duration;
     use tempfile::tempdir;
 
+    const OVERSIZED_PAYLOAD_LEN: u16 = 9999;
+
     fn make_init_payload(filename_bytes: &[u8]) -> Vec<u8> {
         let mut payload = vec![0u8; NAME_OFFSET + filename_bytes.len() + 1];
         payload[0] = ProtocolVersion::V1 as u8;
@@ -915,7 +917,7 @@ mod tests {
 
         let mut overrun = vec![0u8; HEADER_SIZE];
         overrun[0] = PacketType::Data as u8;
-        overrun[5..7].copy_from_slice(&9999u16.to_be_bytes());
+        overrun[5..7].copy_from_slice(&OVERSIZED_PAYLOAD_LEN.to_be_bytes());
         client.send_to(&overrun, recv_addr).unwrap();
 
         let mut bad_init = vec![0u8; HEADER_SIZE + NAME_OFFSET + 2];
