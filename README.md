@@ -212,6 +212,22 @@ goes back to listening. Without `--serve` the same failure exits with an error.
 udpcp recv 9000 --serve          # loop indefinitely
 ```
 
+## Security model
+
+udpcp has no authentication or encryption. Any host that can reach the
+receiver's UDP port can deliver a file: the filename is sanitized (path
+components and control characters are rejected), but the content and its
+SHA-256 are supplied by the sender — the integrity check protects against
+transport corruption, not against a malicious peer. A sender can create or
+overwrite `<name>` and `<name>.tmp` in the receiver's working directory (or
+the explicit output path).
+
+Run the receiver only on trusted networks or inside an encrypted tunnel such
+as WireGuard.
+
+> **Planned**: pre-shared-key INIT authentication (HMAC-SHA256 over the INIT
+> payload) so a receiver only accepts transfers from peers holding the key.
+
 ## MTU tuning
 
 Link MTU varies by path. Standard Ethernet is 1500 B; some paths are as low
