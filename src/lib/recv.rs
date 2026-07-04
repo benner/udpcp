@@ -623,7 +623,7 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
     }
 }
 
-pub fn run_receive(port: &str, out: Option<&str>, config: RecvConfig<'_>) -> io::Result<()> {
+pub fn run_receive(port: u16, out: Option<&str>, config: RecvConfig<'_>) -> io::Result<()> {
     // Bind IPv6 wildcard to accept both IPv4 and IPv6 senders. Linux's default
     // bindv6only=0 makes the socket dual-stack.
     let sock = UdpSocket::bind(format!("[::]:{}", port))?;
