@@ -3,7 +3,6 @@ name: test
 on:  # yamllint disable-line rule:truthy
   pull_request:
     branches: [main]
-    paths: ['**.rs', Cargo.toml, Cargo.lock, .github/workflows/test.yml]
   workflow_dispatch:
 permissions:
   contents: read
