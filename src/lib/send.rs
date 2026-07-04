@@ -429,6 +429,8 @@ mod tests {
     use crate::report::NullReporter;
     use tempfile::tempdir;
 
+    const OVERSIZED_PAYLOAD_LEN: u16 = 9999;
+
     #[test]
     fn zero_bw_is_unlimited() {
         assert_eq!(send_delay(0, 1400), None);
@@ -526,7 +528,7 @@ mod tests {
             .unwrap();
 
         let mut overrun = vec![0u8; HEADER_SIZE];
-        overrun[5..7].copy_from_slice(&9999u16.to_be_bytes());
+        overrun[5..7].copy_from_slice(&OVERSIZED_PAYLOAD_LEN.to_be_bytes());
         receiver_sock.send_to(&overrun, sender_addr).unwrap();
 
         // Header claims 5 NACK entries but carries only one, exercising the

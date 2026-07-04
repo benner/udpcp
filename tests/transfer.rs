@@ -147,21 +147,6 @@ fn run_transfer(
     verify: bool,
     corrupt: f64,
 ) -> io::Result<()> {
-    run_transfer_inner(
-        file_size, loss, latency, reorder, duplicate, verify, corrupt,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_transfer_inner(
-    file_size: usize,
-    loss: f64,
-    latency: Duration,
-    reorder: f64,
-    duplicate: f64,
-    verify: bool,
-    corrupt: f64,
-) -> io::Result<()> {
     let dir = tempfile::tempdir()?;
     let src = dir.path().join("src.bin");
     let dst = dir.path().join("dst.bin");
