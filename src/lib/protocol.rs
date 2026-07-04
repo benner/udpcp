@@ -175,8 +175,13 @@ fn encode_header(header: &PacketHeader, buf: &mut [u8]) {
     buf[5..7].copy_from_slice(&header.payload_len.to_be_bytes());
 }
 
-/// Returns `None` when the type byte is not a known packet type.
+/// Returns `None` when the buffer is shorter than a header or the type byte
+/// is not a known packet type.
 pub(crate) fn decode_header(buf: &[u8]) -> Option<PacketHeader> {
+    if buf.len() < HEADER_SIZE {
+        return None;
+    }
+
     Some(PacketHeader {
         packet_type: PacketType::try_from(buf[0]).ok()?,
         seq: u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]),
@@ -185,10 +190,6 @@ pub(crate) fn decode_header(buf: &[u8]) -> Option<PacketHeader> {
 }
 
 pub(crate) fn parse_packet(buf: &[u8], n: usize) -> Option<(PacketHeader, usize)> {
-    if n < HEADER_SIZE {
-        return None;
-    }
-
     let header = decode_header(&buf[..n])?;
     let payload_end = HEADER_SIZE + header.payload_len as usize;
     if payload_end > n {
@@ -301,6 +302,12 @@ pub(crate) fn read_chunk(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_buffer_decodes_to_no_header() {
+        assert!(decode_header(&[]).is_none());
+        assert!(decode_header(&[PacketType::Init as u8; HEADER_SIZE - 1]).is_none());
+    }
 
     #[test]
     fn chunk_size_zero_rejected() {

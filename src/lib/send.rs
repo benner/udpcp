@@ -102,9 +102,8 @@ impl SendSession<'_> {
                 self.sock.set_read_timeout(Some(attempt_deadline - now))?;
                 match self.sock.recv_from(&mut buf) {
                     Ok((n, from))
-                        if n >= HEADER_SIZE
-                            && decode_header(&buf[..n])
-                                .is_some_and(|h| h.packet_type == PacketType::Ack) =>
+                        if decode_header(&buf[..n])
+                            .is_some_and(|h| h.packet_type == PacketType::Ack) =>
                     {
                         return Ok(from);
                     }
@@ -659,9 +658,6 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let mut buf = [0u8; MAX_UDP_PAYLOAD];
             while let Ok((n, from)) = server.recv_from(&mut buf) {
-                if n < HEADER_SIZE {
-                    continue;
-                }
                 let Some(header) = decode_header(&buf[..n]) else {
                     continue;
                 };
