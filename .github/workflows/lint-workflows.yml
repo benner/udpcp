@@ -15,12 +15,12 @@ jobs:
     steps:
       - name: Checkout code
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
       - name: Run actionlint
         # yamllint disable-line rule:line-length
-        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d  # ratchet:reviewdog/action-actionlint@v1.72.0
+        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d  # v1.72.0
         with:
           github_token: ${{ github.token }}
           reporter: github-pr-review
@@ -33,15 +33,15 @@ jobs:
     steps:
       - name: Checkout code
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
       - name: Set up uv
         # yamllint disable-line rule:line-length
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # ratchet:astral-sh/setup-uv@v7.6.0
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
       - name: Set up reviewdog
         # yamllint disable-line rule:line-length
-        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f  # ratchet:reviewdog/action-setup@v1.5.0
+        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f  # v1.5.0
       - name: Run yamlfix
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
@@ -59,15 +59,15 @@ jobs:
     steps:
       - name: Checkout code
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # ratchet:actions/checkout@v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
       - name: Set up uv
         # yamllint disable-line rule:line-length
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # ratchet:astral-sh/setup-uv@v7.6.0
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
       - name: Set up reviewdog
         # yamllint disable-line rule:line-length
-        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f  # ratchet:reviewdog/action-setup@v1.5.0
+        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f  # v1.5.0
       - name: Run zizmor
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
