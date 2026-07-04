@@ -9,6 +9,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -422,6 +423,7 @@ fn linger(
 
         sock.set_read_timeout(Some(linger_deadline - now))?;
         match sock.recv_from(buf) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(_) => break,
             Ok((_, from)) if from != sender => {}
             Ok((n, _)) => match parse_packet(buf, n).map(|(h, _)| h.packet_type) {
@@ -526,6 +528,7 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                 }
                 continue;
             }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
             Ok(r) => r,
         };
@@ -619,8 +622,20 @@ pub fn run_receive(port: &str, out: Option<&str>, config: RecvConfig<'_>) -> io:
     // bindv6only=0 makes the socket dual-stack.
     let sock = UdpSocket::bind(format!("[::]:{}", port))?;
     install_shutdown_handler(&sock)?;
-    receive_loop(&sock, out, config)
+
+    let result = receive_loop(&sock, out, config);
+
+    // The error that ended receive_loop was our own socket shutdown; re-raise
+    // the signal so the exit status reads killed-by-signal, not socket error.
+    let signal = SHUTDOWN_SIGNAL.load(Ordering::SeqCst);
+    if signal != 0 {
+        let _ = signal_hook::low_level::emulate_default_handler(signal);
+    }
+
+    result
 }
+
+static SHUTDOWN_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 // On SIGINT/SIGTERM, shut down the socket so the blocked recv_from in
 // receive_loop returns; the loop exits and ReceiveState's Drop removes the
@@ -631,7 +646,8 @@ fn install_shutdown_handler(sock: &UdpSocket) -> io::Result<()> {
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
 
     std::thread::spawn(move || {
-        if signals.forever().next().is_some() {
+        if let Some(signal) = signals.forever().next() {
+            SHUTDOWN_SIGNAL.store(signal, Ordering::SeqCst);
             unsafe {
                 libc::shutdown(fd, libc::SHUT_RDWR);
             }
