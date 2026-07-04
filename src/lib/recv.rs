@@ -193,9 +193,12 @@ impl<'a> ReceiveState<'a> {
         }
 
         let offset = seq as u64 * self.chunk_size as u64;
-        // Clamp so an oversized last-chunk payload doesn't extend past EOF.
-        let n = ((self.size - offset) as usize).min(data.len());
-        self.file.write_all_at(&data[..n], offset)?;
+        let expected = (self.size - offset).min(self.chunk_size as u64) as usize;
+        if data.len() != expected {
+            return Ok(());
+        }
+
+        self.file.write_all_at(data, offset)?;
 
         self.mark_received(seq);
         self.count += 1;
@@ -825,6 +828,39 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(!tmp.exists(), "tmp must be removed when integrity fails");
+    }
+
+    #[test]
+    fn wrong_size_payload_is_ignored_and_chunk_stays_requestable() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("out.bin");
+        let content = b"AAAABBBB";
+        let chunk_size: u32 = 4;
+        let hash: [u8; SHA256_DIGEST_SIZE] = Sha256::digest(content).into();
+
+        let mut payload = vec![0u8; NAME_OFFSET + 8];
+        payload[0] = ProtocolVersion::V1 as u8;
+        payload[SIZE_OFFSET..CHUNK_SIZE_OFFSET]
+            .copy_from_slice(&(content.len() as u64).to_be_bytes());
+        payload[CHUNK_SIZE_OFFSET..HASH_OFFSET].copy_from_slice(&chunk_size.to_be_bytes());
+        payload[HASH_OFFSET..HASH_OFFSET + SHA256_DIGEST_SIZE].copy_from_slice(&hash);
+        payload[NAME_OFFSET..NAME_OFFSET + 7].copy_from_slice(b"out.bin");
+
+        let mut state =
+            ReceiveState::new(&payload, Some(out.to_str().unwrap()), &NullReporter).unwrap();
+
+        // Oversized would clobber chunk 1's slot; truncated would otherwise be
+        // marked received and never re-requested.
+        state.store(0, b"AAAAXXXX").unwrap();
+        state.store(1, b"BB").unwrap();
+
+        assert_eq!(state.count, 0, "wrong-size payloads must not be stored");
+
+        state.store(0, b"AAAA").unwrap();
+        state.store(1, b"BBBB").unwrap();
+        state.flush().unwrap();
+
+        assert_eq!(std::fs::read(&out).unwrap(), content);
     }
 
     #[test]
