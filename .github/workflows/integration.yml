@@ -3,12 +3,6 @@ name: integration
 on:  # yamllint disable-line rule:truthy
   pull_request:
     branches: [main]
-    paths:
-      - '**.rs'
-      - Cargo.toml
-      - Cargo.lock
-      - scripts/netem-tests.sh
-      - .github/workflows/integration.yml
   workflow_dispatch:
 permissions:
   contents: read
