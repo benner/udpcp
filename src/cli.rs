@@ -42,7 +42,7 @@ enum Cmd {
 
     /// Receive a file on a local port
     Recv {
-        port: String,
+        port: u16,
         outfile: Option<String>,
         #[command(flatten)]
         args: RecvArgs,
@@ -167,7 +167,7 @@ impl Cli {
             } => {
                 let reporter = make_reporter(args.jsonl, args.progress);
                 run_receive(
-                    &port,
+                    port,
                     outfile.as_deref(),
                     args.into_config(reporter.as_ref()),
                 )
@@ -241,6 +241,12 @@ mod tests {
             }
             Cmd::Send { .. } => panic!("expected recv subcommand"),
         }
+    }
+
+    #[test]
+    fn recv_rejects_non_port_values() {
+        assert!(Cli::try_parse_from(["udpcp", "recv", "70000"]).is_err());
+        assert!(Cli::try_parse_from(["udpcp", "recv", "abc"]).is_err());
     }
 
     #[test]
