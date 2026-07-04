@@ -101,7 +101,10 @@ impl SendSession<'_> {
                 {
                     return Ok(from);
                 }
-                _ => continue,
+                Ok(_) => continue,
+                Err(e) if is_timeout(&e) => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
         }
 
@@ -537,6 +540,37 @@ mod tests {
             matches!(feedback, Feedback::Complete),
             "FIN should end collection"
         );
+    }
+
+    #[test]
+    fn handshake_aborts_on_socket_error() {
+        use std::os::unix::io::AsRawFd;
+
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+
+        let fd = sock.as_raw_fd();
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            unsafe { libc::shutdown(fd, libc::SHUT_RDWR) };
+        });
+
+        let session = SendSession {
+            sock: &sock,
+            target: target.local_addr().unwrap(),
+            chunk_size: 1400,
+            total_chunks: 1,
+            delay: None,
+            version: ProtocolVersion::V1,
+            limits: SendLimits::default(),
+        };
+
+        let err = session
+            .handshake("f", 4, &[0u8; SHA256_DIGEST_SIZE])
+            .unwrap_err();
+        killer.join().unwrap();
+
+        assert_ne!(err.kind(), io::ErrorKind::TimedOut, "got: {}", err);
     }
 
     #[test]
