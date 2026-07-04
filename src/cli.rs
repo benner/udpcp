@@ -55,7 +55,7 @@ struct SendArgs {
     #[arg(long, value_name = "KIB/S", default_value_t = 512)]
     bw: u64,
 
-    /// Chunk size (1–65500)
+    /// Chunk size (1–65500; max 65468 with --verify)
     #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_CHUNK_SIZE)]
     chunk: u32,
 
