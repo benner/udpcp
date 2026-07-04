@@ -7,7 +7,8 @@
 
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -29,7 +30,7 @@ fn sigterm_cleans_up_tmp_file() {
     let mut recv = Command::new(bin)
         .args(["recv", "0", dst.to_str().unwrap()])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
@@ -78,12 +79,27 @@ fn sigterm_cleans_up_tmp_file() {
         .success();
     assert!(kill_ok, "kill -TERM failed");
 
-    let _ = recv.wait();
+    let mut recv_stderr = recv.stderr.take().unwrap();
+    let status = recv.wait().unwrap();
     let _ = send.kill();
     let _ = send.wait();
 
     assert!(
         !tmp.exists(),
         ".tmp still present after receiver caught SIGTERM"
+    );
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGTERM),
+        "receiver should die by SIGTERM's default disposition, got {:?}",
+        status
+    );
+
+    let mut stderr = String::new();
+    recv_stderr.read_to_string(&mut stderr).unwrap();
+    assert!(
+        stderr.is_empty(),
+        "interrupt must not report an error, got: {}",
+        stderr
     );
 }
