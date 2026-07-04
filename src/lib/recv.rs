@@ -440,6 +440,45 @@ fn linger(
     Ok(())
 }
 
+fn reset_listening<'a>(
+    sock: &UdpSocket,
+    reporter: &dyn TransferReporter,
+    state: &mut Option<ReceiveState<'a>>,
+    sender: &mut Option<SocketAddr>,
+    last_nack_at: &mut Option<Instant>,
+) -> io::Result<()> {
+    *state = None;
+    *sender = None;
+    *last_nack_at = None;
+    sock.set_read_timeout(None)?;
+
+    reporter.report(TransferEvent::Listening {
+        addr: sock.local_addr()?,
+    });
+
+    Ok(())
+}
+
+fn abandon_transfer<'a>(
+    error: io::Error,
+    serve: bool,
+    reporter: &dyn TransferReporter,
+    sock: &UdpSocket,
+    state: &mut Option<ReceiveState<'a>>,
+    sender: &mut Option<SocketAddr>,
+    last_nack_at: &mut Option<Instant>,
+) -> io::Result<()> {
+    if !serve {
+        return Err(error);
+    }
+
+    reporter.report(TransferEvent::Failed {
+        reason: &error.to_string(),
+    });
+
+    reset_listening(sock, reporter, state, sender, last_nack_at)
+}
+
 pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>) -> io::Result<()> {
     let RecvConfig {
         serve,
@@ -466,12 +505,24 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
 
         let (n, from) = match sock.recv_from(&mut buf) {
             Err(e) if is_timeout(&e) => {
-                if let Some(ctx) = &state
-                    && let Some(sndr) = sender
-                    && let TickOutcome::Nacked(at) =
-                        ctx.on_idle_tick(sock, sndr, last_data_at, last_nack_at, limits)?
-                {
-                    last_nack_at = Some(at);
+                let tick = match (&state, sender) {
+                    (Some(ctx), Some(sndr)) => {
+                        ctx.on_idle_tick(sock, sndr, last_data_at, last_nack_at, limits)
+                    }
+                    _ => Ok(TickOutcome::Waiting),
+                };
+                match tick {
+                    Ok(TickOutcome::Nacked(at)) => last_nack_at = Some(at),
+                    Ok(TickOutcome::Waiting) => {}
+                    Err(e) => abandon_transfer(
+                        e,
+                        serve,
+                        reporter,
+                        sock,
+                        &mut state,
+                        &mut sender,
+                        &mut last_nack_at,
+                    )?,
                 }
                 continue;
             }
@@ -510,16 +561,41 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                 send_control(sock, from, PacketType::Ack, 0)?;
             }
             PacketType::Data => {
-                if let Some(ctx) = &mut state {
-                    ctx.accept_data(header.seq, &buf[HEADER_SIZE..payload_end])?;
+                let stored = match &mut state {
+                    Some(ctx) => ctx.accept_data(header.seq, &buf[HEADER_SIZE..payload_end]),
+                    None => Ok(()),
+                };
+                if let Err(e) = stored {
+                    abandon_transfer(
+                        e,
+                        serve,
+                        reporter,
+                        sock,
+                        &mut state,
+                        &mut sender,
+                        &mut last_nack_at,
+                    )?;
                 }
             }
             PacketType::Done => {
                 let Some(sndr) = sender else { continue };
                 let Some(ctx) = state.as_mut() else { continue };
 
-                if let DoneOutcome::Incomplete = ctx.handle_done(sock, sndr)? {
-                    continue;
+                match ctx.handle_done(sock, sndr) {
+                    Ok(DoneOutcome::Incomplete) => continue,
+                    Ok(DoneOutcome::Complete) => {}
+                    Err(e) => {
+                        abandon_transfer(
+                            e,
+                            serve,
+                            reporter,
+                            sock,
+                            &mut state,
+                            &mut sender,
+                            &mut last_nack_at,
+                        )?;
+                        continue;
+                    }
                 }
 
                 state.take();
@@ -530,14 +606,7 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                     return Ok(());
                 }
 
-                sock.set_read_timeout(None)?;
-                state = None;
-                sender = None;
-                last_nack_at = None;
-
-                reporter.report(TransferEvent::Listening {
-                    addr: sock.local_addr()?,
-                });
+                reset_listening(sock, reporter, &mut state, &mut sender, &mut last_nack_at)?;
                 continue 'transfer;
             }
             _ => {}
@@ -858,6 +927,139 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         assert!(err.to_string().contains("idle timeout"), "got: {}", err);
+    }
+
+    #[test]
+    fn serve_mode_resets_after_hash_mismatch() {
+        let dir = tempdir().unwrap();
+        let dst = dir.path().join("d.bin");
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+        let dst_str = dst.to_str().unwrap().to_string();
+        let config = RecvConfig {
+            serve: true,
+            linger_timeout: Duration::from_millis(200),
+            reporter: &NullReporter,
+            limits: RecvLimits::default(),
+        };
+        std::thread::spawn(move || {
+            let _ = receive_loop(&recv_sock, Some(&dst_str), config);
+        });
+
+        // A complete transfer whose INIT declared a zero hash: the receiver
+        // accepts every chunk, then fails the final integrity check.
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; MAX_UDP_PAYLOAD];
+        let data = b"data";
+
+        let mut init = vec![0u8; NAME_OFFSET + 1];
+        init[0] = ProtocolVersion::V1 as u8;
+        init[SIZE_OFFSET..CHUNK_SIZE_OFFSET].copy_from_slice(&(data.len() as u64).to_be_bytes());
+        init[CHUNK_SIZE_OFFSET..HASH_OFFSET].copy_from_slice(&DEFAULT_CHUNK_SIZE.to_be_bytes());
+        init[NAME_OFFSET] = b'd';
+        send_packet(
+            &client,
+            recv_addr,
+            &PacketHeader {
+                packet_type: PacketType::Init,
+                seq: 0,
+                payload_len: init.len() as u16,
+            },
+            &init,
+        )
+        .unwrap();
+        let (n, _) = client.recv_from(&mut buf).unwrap();
+        assert!(decode_header(&buf[..n]).unwrap().packet_type == PacketType::Ack);
+
+        send_packet(
+            &client,
+            recv_addr,
+            &PacketHeader {
+                packet_type: PacketType::Data,
+                seq: 0,
+                payload_len: data.len() as u16,
+            },
+            data,
+        )
+        .unwrap();
+        send_control(&client, recv_addr, PacketType::Done, 1).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        // The receiver must have reset instead of exiting: a well-formed
+        // transfer right after must still land.
+        let src = dir.path().join("s.bin");
+        let want = vec![9u8; 3000];
+        std::fs::write(&src, &want).unwrap();
+        run_send(
+            src.to_str().unwrap(),
+            &recv_addr.to_string(),
+            SendConfig {
+                chunk_size: 1400,
+                delay: None,
+                version: ProtocolVersion::V1,
+                reporter: &NullReporter,
+                limits: SendLimits::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dst).unwrap(), want);
+        assert!(
+            !dir.path().join("d.bin.tmp").exists(),
+            "abandoned transfer must not leave a .tmp behind"
+        );
+    }
+
+    #[test]
+    fn serve_mode_resets_after_idle_timeout() {
+        let dir = tempdir().unwrap();
+        let dst = dir.path().join("d.bin");
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+        let dst_str = dst.to_str().unwrap().to_string();
+        let config = RecvConfig {
+            serve: true,
+            linger_timeout: Duration::from_millis(200),
+            reporter: &NullReporter,
+            limits: RecvLimits {
+                idle_timeout: Duration::from_millis(150),
+                nack_holdoff: NACK_HOLDOFF,
+            },
+        };
+        std::thread::spawn(move || {
+            let _ = receive_loop(&recv_sock, Some(&dst_str), config);
+        });
+
+        // Open a transfer, then go silent until the idle timer fires.
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let payload = make_init_payload(b"d");
+        let mut init = vec![0u8; HEADER_SIZE + payload.len()];
+        init[0] = PacketType::Init as u8;
+        init[5..7].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+        init[HEADER_SIZE..].copy_from_slice(&payload);
+        client.send_to(&init, recv_addr).unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+
+        let src = dir.path().join("s.bin");
+        let want = vec![3u8; 2000];
+        std::fs::write(&src, &want).unwrap();
+        run_send(
+            src.to_str().unwrap(),
+            &recv_addr.to_string(),
+            SendConfig {
+                chunk_size: 1400,
+                delay: None,
+                version: ProtocolVersion::V1,
+                reporter: &NullReporter,
+                limits: SendLimits::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dst).unwrap(), want);
     }
 
     #[test]

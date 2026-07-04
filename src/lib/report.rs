@@ -59,6 +59,10 @@ pub enum TransferEvent<'a> {
 
     /// An INIT could not be parsed; the receiver keeps waiting.
     BadInit { reason: &'a str },
+
+    /// The transfer was abandoned — write failure, integrity mismatch, or
+    /// idle timeout; a serving receiver resets and keeps listening.
+    Failed { reason: &'a str },
 }
 
 /// Sink for [`TransferEvent`]s. Implementors own formatting, the output

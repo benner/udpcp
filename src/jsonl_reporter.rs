@@ -95,6 +95,7 @@ impl JsonlReporter {
                 "elapsed_ms": elapsed.as_millis() as u64,
             }),
             TransferEvent::BadInit { reason } => json!({"event": "bad_init", "reason": reason}),
+            TransferEvent::Failed { reason } => json!({"event": "failed", "reason": reason}),
         };
 
         Some(value)
@@ -177,6 +178,20 @@ mod tests {
 
         assert_eq!(v["event"], "bad_init");
         assert_eq!(v["reason"], "weird \"name\"\twith ctrl");
+    }
+
+    #[test]
+    fn failed_event_renders_reason() {
+        let r = JsonlReporter::new(false);
+        let v = parse(&line(
+            &r,
+            TransferEvent::Failed {
+                reason: "integrity check failed: SHA-256 mismatch",
+            },
+        ));
+
+        assert_eq!(v["event"], "failed");
+        assert_eq!(v["reason"], "integrity check failed: SHA-256 mismatch");
     }
 
     #[test]
