@@ -240,9 +240,8 @@ pub(crate) fn encode_nack_payload(seqs: &[u32]) -> Vec<u8> {
 }
 
 pub(crate) fn decode_nack_payload(count: usize, payload: &[u8], out: &mut Vec<u32>) {
-    for seq in payload.chunks_exact(SEQUENCE_BYTES).take(count) {
-        out.push(u32::from_be_bytes(seq.try_into().unwrap()));
-    }
+    let (seqs, _) = payload.as_chunks::<SEQUENCE_BYTES>();
+    out.extend(seqs.iter().take(count).map(|seq| u32::from_be_bytes(*seq)));
 }
 
 pub(crate) fn is_timeout(e: &io::Error) -> bool {
