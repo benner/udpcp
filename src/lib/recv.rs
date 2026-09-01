@@ -564,7 +564,17 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                     }
                 }
 
-                send_control(sock, from, PacketType::Ack, 0)?;
+                if let Err(e) = send_control(sock, from, PacketType::Ack, 0) {
+                    abandon_transfer(
+                        e,
+                        serve,
+                        reporter,
+                        sock,
+                        &mut state,
+                        &mut sender,
+                        &mut last_nack_at,
+                    )?;
+                }
             }
             PacketType::Data => {
                 let stored = match &mut state {
@@ -608,7 +618,7 @@ pub fn receive_loop(sock: &UdpSocket, out: Option<&str>, config: RecvConfig<'_>)
                 }
 
                 state.take();
-                send_control(sock, sndr, PacketType::Fin, 0)?;
+                let _ = send_control(sock, sndr, PacketType::Fin, 0);
                 linger(sock, sndr, linger_timeout, &mut buf)?;
 
                 if !serve {
@@ -1117,6 +1127,71 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read(&dst).unwrap(), want);
+    }
+
+    // shutdown(SHUT_WR) kills only the write half of the socket: INIT still
+    // arrives, but the ACK reply fails with EPIPE.
+    fn kill_write_half(sock: &UdpSocket) {
+        unsafe { libc::shutdown(sock.as_raw_fd(), libc::SHUT_WR) };
+    }
+
+    fn send_init(client: &UdpSocket, recv_addr: SocketAddr) {
+        let payload = make_init_payload(b"d");
+        let mut init = vec![0u8; HEADER_SIZE + payload.len()];
+        init[0] = PacketType::Init as u8;
+        init[5..7].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+        init[HEADER_SIZE..].copy_from_slice(&payload);
+
+        client.send_to(&init, recv_addr).unwrap();
+    }
+
+    #[test]
+    fn serve_mode_survives_ack_send_error() {
+        let dir = tempdir().unwrap();
+        let dst_str = dir.path().join("d.bin").to_str().unwrap().to_string();
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+        kill_write_half(&recv_sock);
+        let config = RecvConfig {
+            serve: true,
+            linger_timeout: Duration::from_millis(200),
+            reporter: &NullReporter,
+            limits: RecvLimits::default(),
+        };
+        let handle = std::thread::spawn(move || {
+            let _ = receive_loop(&recv_sock, Some(&dst_str), config);
+        });
+
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        send_init(&client, recv_addr);
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(
+            !handle.is_finished(),
+            "serve loop must reset, not exit, when the ACK send fails"
+        );
+    }
+
+    #[test]
+    fn one_shot_receive_aborts_on_ack_send_error() {
+        let dir = tempdir().unwrap();
+        let dst = dir.path().join("d.bin");
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+        kill_write_half(&recv_sock);
+
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        send_init(&client, recv_addr);
+
+        let config = RecvConfig {
+            serve: false,
+            linger_timeout: Duration::from_millis(200),
+            reporter: &NullReporter,
+            limits: RecvLimits::default(),
+        };
+        let err = receive_loop(&recv_sock, Some(dst.to_str().unwrap()), config).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]
