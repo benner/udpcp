@@ -373,10 +373,9 @@ pub fn run_send(file: &str, target: &str, config: SendConfig) -> io::Result<()> 
     });
 
     // Best-effort FIN-ACK so the receiver stops lingering immediately.
-    let complete = || -> io::Result<()> {
-        send_control(&sock, receiver_addr, PacketType::FinAck, 0)?;
+    let complete = || {
+        let _ = send_control(&sock, receiver_addr, PacketType::FinAck, 0);
         reporter.report(TransferEvent::Completed);
-        Ok(())
     };
 
     let announce_pass = |pass, chunks: usize| {
@@ -392,12 +391,16 @@ pub fn run_send(file: &str, target: &str, config: SendConfig) -> io::Result<()> 
 
     loop {
         if session.send_pending(&mut f, &mut blast, reporter, receiver_addr, start)? {
-            return complete();
+            complete();
+            return Ok(());
         }
 
         send_control(&sock, addr, PacketType::Done, total_chunks)?;
         match collect_feedback(&sock, receiver_addr, limits)? {
-            Feedback::Complete => return complete(),
+            Feedback::Complete => {
+                complete();
+                return Ok(());
+            }
             Feedback::Retransmit(missing) => {
                 pass += 1;
                 if pass > limits.retransmit_passes {
