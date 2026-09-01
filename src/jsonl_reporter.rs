@@ -29,7 +29,11 @@ impl JsonlReporter {
                 name,
                 bytes,
                 chunks,
-            } => json!({"event": "sending", "name": name, "bytes": bytes, "chunks": chunks}),
+            } => {
+                self.last_pct.store(-1, Ordering::Relaxed);
+
+                json!({"event": "sending", "name": name, "bytes": bytes, "chunks": chunks})
+            }
             TransferEvent::PassStarted { pass, chunks } => {
                 if !self.progress {
                     return None;
@@ -70,13 +74,17 @@ impl JsonlReporter {
                 bytes,
                 chunks,
                 chunk_size,
-            } => json!({
-                "event": "receiving",
-                "path": path.display().to_string(),
-                "bytes": bytes,
-                "chunks": chunks,
-                "chunk_size": chunk_size,
-            }),
+            } => {
+                self.last_pct.store(-1, Ordering::Relaxed);
+
+                json!({
+                    "event": "receiving",
+                    "path": path.display().to_string(),
+                    "bytes": bytes,
+                    "chunks": chunks,
+                    "chunk_size": chunk_size,
+                })
+            }
             TransferEvent::MissingChunks { count } => {
                 if !self.progress {
                     return None;
@@ -208,6 +216,34 @@ mod tests {
         assert!(line(&r, ev(1)).is_empty()); // still 0% — throttled
         assert!(!line(&r, ev(2)).is_empty()); // 1% — emitted
         assert!(line(&r, ev(3)).is_empty()); // still 1% — throttled
+    }
+
+    #[test]
+    fn progress_throttle_resets_at_transfer_start() {
+        let r = JsonlReporter::new(true);
+        let full = || TransferEvent::Progress {
+            done: 200,
+            total: 200,
+            chunk_size: 1400,
+            elapsed: Duration::from_secs(1),
+        };
+
+        // Serve mode: transfer one ends at 100%, transfer two opens at 100%.
+        assert!(!line(&r, full()).is_empty());
+        line(
+            &r,
+            TransferEvent::Receiving {
+                path: Path::new("out.bin"),
+                bytes: 280_000,
+                chunks: 200,
+                chunk_size: 1400,
+            },
+        );
+
+        assert!(
+            !line(&r, full()).is_empty(),
+            "a new transfer's first percent must emit even if it matches the last one's"
+        );
     }
 
     #[test]
