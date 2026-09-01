@@ -30,6 +30,7 @@ struct SendSession<'a> {
 struct Blast {
     pending: VecDeque<u32>,
     queued: HashSet<u32>,
+    total_chunks: u32,
     chunk_buf: Vec<u8>,
     verify_buf: Vec<u8>,
     drain_buf: Vec<u8>,
@@ -44,6 +45,7 @@ impl Blast {
         Blast {
             pending,
             queued,
+            total_chunks,
             chunk_buf: vec![0u8; chunk_size as usize],
             verify_buf: if version.verifies() {
                 vec![0u8; SHA256_DIGEST_SIZE + chunk_size as usize]
@@ -55,12 +57,59 @@ impl Blast {
         }
     }
 
-    fn enqueue(&mut self, missing: Vec<u32>) {
-        for seq in missing {
-            if self.queued.insert(seq) {
+    fn chunk_exists(&self, seq: u32) -> bool {
+        seq < self.total_chunks
+    }
+
+    fn enqueue(&mut self, missing: &[u32]) {
+        for &seq in missing {
+            if self.chunk_exists(seq) && self.queued.insert(seq) {
                 self.pending.push_back(seq);
             }
         }
+    }
+
+    fn drain_feedback(&mut self, sock: &UdpSocket, receiver_addr: SocketAddr) -> io::Result<bool> {
+        sock.set_nonblocking(true)?;
+        let mut nacks = Vec::new();
+        let mut saw_fin = false;
+
+        loop {
+            match sock.recv_from(&mut self.drain_buf) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => {
+                    sock.set_nonblocking(false)?;
+                    return Err(e);
+                }
+                Ok((n, from)) => {
+                    if from != receiver_addr {
+                        continue;
+                    }
+                    let Some((header, payload_end)) = parse_packet(&self.drain_buf, n) else {
+                        continue;
+                    };
+                    match header.packet_type {
+                        PacketType::Fin => {
+                            saw_fin = true;
+                            break;
+                        }
+                        PacketType::Nack => {
+                            nacks.clear();
+                            decode_nack_payload(
+                                header.seq as usize,
+                                &self.drain_buf[HEADER_SIZE..payload_end],
+                                &mut nacks,
+                            );
+                            self.enqueue(&nacks);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        sock.set_nonblocking(false)?;
+        Ok(saw_fin)
     }
 }
 
@@ -182,13 +231,7 @@ impl SendSession<'_> {
             since_drain += 1;
             if since_drain >= FEEDBACK_DRAIN_INTERVAL {
                 since_drain = 0;
-                if drain_feedback(
-                    self.sock,
-                    receiver_addr,
-                    &mut blast.drain_buf,
-                    &mut blast.pending,
-                    &mut blast.queued,
-                )? {
+                if blast.drain_feedback(self.sock, receiver_addr)? {
                     return Ok(true);
                 }
             }
@@ -246,59 +289,6 @@ fn collect_feedback(
             }
         }
     }
-}
-
-fn drain_feedback(
-    sock: &UdpSocket,
-    receiver_addr: SocketAddr,
-    buf: &mut [u8],
-    pending: &mut VecDeque<u32>,
-    queued: &mut HashSet<u32>,
-) -> io::Result<bool> {
-    sock.set_nonblocking(true)?;
-    let mut nacks = Vec::new();
-    let mut saw_fin = false;
-
-    loop {
-        match sock.recv_from(buf) {
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-            Err(e) => {
-                sock.set_nonblocking(false)?;
-                return Err(e);
-            }
-            Ok((n, from)) => {
-                if from != receiver_addr {
-                    continue;
-                }
-                let Some((header, payload_end)) = parse_packet(buf, n) else {
-                    continue;
-                };
-                match header.packet_type {
-                    PacketType::Fin => {
-                        saw_fin = true;
-                        break;
-                    }
-                    PacketType::Nack => {
-                        nacks.clear();
-                        decode_nack_payload(
-                            header.seq as usize,
-                            &buf[HEADER_SIZE..payload_end],
-                            &mut nacks,
-                        );
-                        for &seq in &nacks {
-                            if queued.insert(seq) {
-                                pending.push_back(seq);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    sock.set_nonblocking(false)?;
-    Ok(saw_fin)
 }
 
 /// Convert a `--bw` limit in KiB/s into the per-packet send delay.
@@ -416,7 +406,7 @@ pub fn run_send(file: &str, target: &str, config: SendConfig) -> io::Result<()> 
                         limits.retransmit_passes
                     )));
                 }
-                blast.enqueue(missing);
+                blast.enqueue(&missing);
                 announce_pass(pass, blast.pending.len());
             }
         }
@@ -708,6 +698,23 @@ mod tests {
         handle.join().unwrap();
     }
 
+    fn drained_blast(total_chunks: u32) -> Blast {
+        let mut blast = Blast::new(1400, ProtocolVersion::V1, total_chunks);
+        blast.pending.clear();
+        blast.queued.clear();
+
+        blast
+    }
+
+    #[test]
+    fn enqueue_drops_seqs_past_the_last_chunk() {
+        let mut blast = drained_blast(4);
+
+        blast.enqueue(&[2, 4, u32::MAX]);
+
+        assert_eq!(blast.pending.iter().copied().collect::<Vec<_>>(), vec![2]);
+    }
+
     #[test]
     fn drain_feedback_enqueues_nacked_chunks() {
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -731,15 +738,15 @@ mod tests {
         .unwrap();
         std::thread::sleep(Duration::from_millis(20));
 
-        let mut pending: VecDeque<u32> = VecDeque::new();
-        let mut queued: HashSet<u32> = HashSet::new();
-        let mut buf = [0u8; MAX_UDP_PAYLOAD];
+        let mut blast = drained_blast(4);
 
-        let fin =
-            drain_feedback(&sender, receiver_addr, &mut buf, &mut pending, &mut queued).unwrap();
+        let fin = blast.drain_feedback(&sender, receiver_addr).unwrap();
 
         assert!(!fin, "no FIN was sent");
-        assert_eq!(pending.iter().copied().collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(
+            blast.pending.iter().copied().collect::<Vec<_>>(),
+            vec![1, 3]
+        );
 
         // A repeat NACK for an already-queued chunk must not double-enqueue it.
         send_packet(
@@ -754,9 +761,42 @@ mod tests {
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(20));
-        drain_feedback(&sender, receiver_addr, &mut buf, &mut pending, &mut queued).unwrap();
+        blast.drain_feedback(&sender, receiver_addr).unwrap();
 
-        assert_eq!(pending.iter().copied().collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(
+            blast.pending.iter().copied().collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+    }
+
+    #[test]
+    fn drain_feedback_drops_seqs_past_the_last_chunk() {
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender_addr = sender.local_addr().unwrap();
+        let receiver_addr = receiver.local_addr().unwrap();
+
+        // A NACK for chunks 2 and 9 of a 4-chunk file: only 2 is real.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u32.to_be_bytes());
+        payload.extend_from_slice(&9u32.to_be_bytes());
+        send_packet(
+            &receiver,
+            sender_addr,
+            &PacketHeader {
+                packet_type: PacketType::Nack,
+                seq: 2,
+                payload_len: payload.len() as u16,
+            },
+            &payload,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+
+        let mut blast = drained_blast(4);
+        blast.drain_feedback(&sender, receiver_addr).unwrap();
+
+        assert_eq!(blast.pending.iter().copied().collect::<Vec<_>>(), vec![2]);
     }
 
     #[test]
@@ -769,12 +809,9 @@ mod tests {
         send_control(&receiver, sender_addr, PacketType::Fin, 0).unwrap();
         std::thread::sleep(Duration::from_millis(20));
 
-        let mut pending: VecDeque<u32> = VecDeque::new();
-        let mut queued: HashSet<u32> = HashSet::new();
-        let mut buf = [0u8; MAX_UDP_PAYLOAD];
+        let mut blast = drained_blast(4);
 
-        let fin =
-            drain_feedback(&sender, receiver_addr, &mut buf, &mut pending, &mut queued).unwrap();
+        let fin = blast.drain_feedback(&sender, receiver_addr).unwrap();
 
         assert!(fin, "FIN should be detected");
     }
