@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - name: Run misspell
         # yamllint disable-line rule:line-length
-        uses: reviewdog/action-misspell@d6429416b12b09b4e2768307d53bef58d172e962  # v1.27.0
+        uses: reviewdog/action-misspell@c846b6b0996029d2d39540c8ffebebbd957072db  # v1.31.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-pr-review
