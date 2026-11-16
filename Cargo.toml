@@ -12,6 +12,7 @@ rust-version = "1.88"
 
 [package.metadata.deb]
 section = "net"
+maintainer = "Nerijus Bendžiūnas <nerijus.bendziunas@gmail.com>"
 copyright = "2026 Nerijus Bendžiūnas <nerijus.bendziunas@gmail.com>"
 depends = ""
 
